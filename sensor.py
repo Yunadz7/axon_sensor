@@ -2,7 +2,7 @@ import serial
 import json
 import mysql.connector
 import time
-
+# python sensor.py
 def conectar_banco():
     try:
         return mysql.connector.connect(
