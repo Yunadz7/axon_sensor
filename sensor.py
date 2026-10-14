@@ -3,42 +3,51 @@ import json
 import mysql.connector
 import time
 
-# Conexão com o banco local
-try:
-    db = mysql.connector.connect(
-        host="localhost",
-        user="root",
-        password="", # Coloque a senha do MySQL se o seu XAMPP tiver
-        database="axon"
-    )
-    cursor = db.cursor()
-    print("✅ Conectado ao banco de dados MySQL ('axon')!")
-except Exception as e:
-    print(f"❌ Erro ao conectar no MySQL: {e}")
+def conectar_banco():
+    try:
+        return mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="",  # Coloque a senha do MySQL se o XAMPP tiver
+            database="axon",
+            autocommit=True
+        )
+    except Exception as e:
+        print(f"❌ Erro ao conectar no MySQL: {e}")
+        return None
+
+db = conectar_banco()
+if not db:
     exit()
 
-PORTA_USB = 'COM3' # Verifique se a sua porta é COM3, COM4, COM5...
+print("✅ Conectado ao banco de dados MySQL ('axon')!")
+
+PORTA_USB = 'COM3'  # Verifique sua porta COM no Gerenciador de Dispositivos
 BAUD_RATE = 115200
 
-# Função que descobre quem é o usuário logado
-def pegar_usuario_logado():
+def pegar_usuario_logado(conexao_db):
     try:
-        cursor.execute("SELECT usuario_id FROM dispositivo_ativo WHERE id = 1 LIMIT 1")
-        resultado = cursor.fetchone()
-        if resultado and resultado[0]:
+        # Garante que a conexão está ativa antes de consultar
+        conexao_db.ping(reconnect=True, attempts=3, delay=1)
+        cursor_temp = conexao_db.cursor()
+        cursor_temp.execute("SELECT usuario_id FROM dispositivo_ativo WHERE id = 1 LIMIT 1")
+        resultado = cursor_temp.fetchone()
+        cursor_temp.close()
+
+        if resultado and resultado[0] is not None:
             return resultado[0]
     except Exception as err:
-        pass
-    return 1 # Se der erro, usa 1 como padrão
+        print(f"⚠️ Erro ao consultar dispositivo_ativo: {err}")
+    return 1  # Fallback padrao
 
 try:
-    conexao = serial.Serial(PORTA_USB, BAUD_RATE, timeout=1)
+    conexao_serial = serial.Serial(PORTA_USB, BAUD_RATE, timeout=1)
     print(f"✅ Lendo dados da ESP32 na porta {PORTA_USB}...")
 
     while True:
-        if conexao.in_waiting > 0:
-            linha = conexao.readline().decode('utf-8', errors='ignore').strip()
-            
+        if conexao_serial.in_waiting > 0:
+            linha = conexao_serial.readline().decode('utf-8', errors='ignore').strip()
+
             if linha.startswith("{") and linha.endswith("}"):
                 try:
                     dados = json.loads(linha)
@@ -46,15 +55,20 @@ try:
                     spo2 = dados.get("spo2", 0)
 
                     if bpm > 0:
-                        # 🔍 Pega o ID do usuário que está logado no momento
-                        user_id = pegar_usuario_logado()
+                        # 1. Pega o ID atual do usuário no banco
+                        user_id = pegar_usuario_logado(db)
 
-                        # 📥 Salva com o ID correto do usuário
+                        # 2. Garante reconexão e insere no banco
+                        db.ping(reconnect=True, attempts=3, delay=1)
+                        cursor_insert = db.cursor()
                         sql = "INSERT INTO leituras_sensor (usuario_id, bpm, spo2) VALUES (%s, %s, %s)"
-                        cursor.execute(sql, (user_id, bpm, spo2))
-                        db.commit()
-                        print(f"📥 Salvo para Usuário ID {user_id} -> BPM: {bpm} | SpO2: {spo2}%")
+                        cursor_insert.execute(sql, (user_id, bpm, spo2))
+                        cursor_insert.close()
 
+                        print(f"📥 BPM: {bpm} | SpO2: {spo2}%")
+
+                except json.JSONDecodeError:
+                    pass
                 except Exception as err:
                     print(f"⚠️ Erro ao salvar: {err}")
 
@@ -62,7 +76,9 @@ try:
 
 except KeyboardInterrupt:
     print("\n🛑 Programa parado pelo usuário.")
+except Exception as e:
+    print(f"❌ Erro na porta Serial ({PORTA_USB}): {e}")
 finally:
-    if 'db' in locals() and db.is_connected():
-        cursor.close()
+    if 'db' in locals() and db and db.is_connected():
         db.close()
+        print("🔒 Conexão com o banco encerrada.")
