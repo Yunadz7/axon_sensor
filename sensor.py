@@ -8,7 +8,7 @@ def conectar_banco():
         return mysql.connector.connect(
             host="localhost",
             user="root",
-            password="",  # Coloque a senha do MySQL se o XAMPP tiver
+            password="",  # Coloque sua senha do MySQL se o XAMPP tiver
             database="axon",
             autocommit=True
         )
@@ -25,9 +25,17 @@ print("✅ Conectado ao banco de dados MySQL ('axon')!")
 PORTA_USB = 'COM3'  # Verifique sua porta COM no Gerenciador de Dispositivos
 BAUD_RATE = 115200
 
+# 🧠 FUNÇÃO PARA CALCULAR O NÍVEL DE ANSIEDADE BASEADO NO BPM
+def calcular_nivel_ansiedade(bpm):
+    if bpm < 80:
+        return "Calmo"
+    elif 80 <= bpm <= 100:
+        return "Ansiedade Média"
+    else:
+        return "Ansiedade Alta"
+
 def pegar_usuario_logado(conexao_db):
     try:
-        # Garante que a conexão está ativa antes de consultar
         conexao_db.ping(reconnect=True, attempts=3, delay=1)
         cursor_temp = conexao_db.cursor()
         cursor_temp.execute("SELECT usuario_id FROM dispositivo_ativo WHERE id = 1 LIMIT 1")
@@ -38,7 +46,7 @@ def pegar_usuario_logado(conexao_db):
             return resultado[0]
     except Exception as err:
         print(f"⚠️ Erro ao consultar dispositivo_ativo: {err}")
-    return 1  # Fallback padrao
+    return 1
 
 try:
     conexao_serial = serial.Serial(PORTA_USB, BAUD_RATE, timeout=1)
@@ -58,14 +66,18 @@ try:
                         # 1. Pega o ID atual do usuário no banco
                         user_id = pegar_usuario_logado(db)
 
-                        # 2. Garante reconexão e insere no banco
+                        # 2. Calcula a categoria de ansiedade
+                        status_ansiedade = calcular_nivel_ansiedade(bpm)
+
+                        # 3. Garante reconexão e insere no banco
                         db.ping(reconnect=True, attempts=3, delay=1)
                         cursor_insert = db.cursor()
                         sql = "INSERT INTO leituras_sensor (usuario_id, bpm, spo2) VALUES (%s, %s, %s)"
                         cursor_insert.execute(sql, (user_id, bpm, spo2))
                         cursor_insert.close()
 
-                        print(f"📥 BPM: {bpm} | SpO2: {spo2}%")
+                        # 4. Exibe no monitor/terminal com a classificação
+                        print(f"📥 BPM: {bpm} | SpO2: {spo2}% | Status: {status_ansiedade}")
 
                 except json.JSONDecodeError:
                     pass
