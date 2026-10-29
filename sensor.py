@@ -1,14 +1,17 @@
 import serial
+import time
 import json
 import mysql.connector
-import time
-# python sensor.py
+
+# ==========================================
+# CONEXÃO COM O BANCO DE DADOS
+# ==========================================
 def conectar_banco():
     try:
         return mysql.connector.connect(
             host="localhost",
             user="root",
-            password="",  # Coloque sua senha do MySQL se o XAMPP tiver
+            password="",  # Insira a senha se o seu MySQL tiver
             database="axon",
             autocommit=True
         )
@@ -16,80 +19,72 @@ def conectar_banco():
         print(f"❌ Erro ao conectar no MySQL: {e}")
         return None
 
+def pegar_usuario_logado(conexao_db):
+    try:
+        conexao_db.ping(reconnect=True, attempts=3, delay=1)
+        cursor = conexao_db.cursor()
+        cursor.execute("SELECT usuario_id FROM dispositivo_ativo WHERE id = 1 LIMIT 1")
+        resultado = cursor.fetchone()
+        cursor.close()
+
+        if resultado and resultado[0] is not None:
+            return resultado[0]
+    except Exception as err:
+        pass
+    return 1
+
 db = conectar_banco()
 if not db:
     exit()
 
 print("✅ Conectado ao banco de dados MySQL ('axon')!")
 
-PORTA_USB = 'COM3'  # Verifique sua porta COM no Gerenciador de Dispositivos
+# ==========================================
+# LEITURA SERIAL E GRAVAÇÃO
+# ==========================================
+PORTA_USB = 'COM3'
 BAUD_RATE = 115200
 
-# 🧠 FUNÇÃO PARA CALCULAR O NÍVEL DE ANSIEDADE BASEADO NO BPM
-def calcular_nivel_ansiedade(bpm):
-    if bpm < 80:
-        return "Calmo"
-    elif 80 <= bpm <= 100:
-        return "Ansiedade Média"
-    else:
-        return "Ansiedade Alta"
-
-def pegar_usuario_logado(conexao_db):
-    try:
-        conexao_db.ping(reconnect=True, attempts=3, delay=1)
-        cursor_temp = conexao_db.cursor()
-        cursor_temp.execute("SELECT usuario_id FROM dispositivo_ativo WHERE id = 1 LIMIT 1")
-        resultado = cursor_temp.fetchone()
-        cursor_temp.close()
-
-        if resultado and resultado[0] is not None:
-            return resultado[0]
-    except Exception as err:
-        print(f"⚠️ Erro ao consultar dispositivo_ativo: {err}")
-    return 1
-
 try:
-    conexao_serial = serial.Serial(PORTA_USB, BAUD_RATE, timeout=1)
-    print(f"✅ Lendo dados da ESP32 na porta {PORTA_USB}...")
+    print(f"Tentando abrir a porta {PORTA_USB}...")
+    conexao = serial.Serial(PORTA_USB, BAUD_RATE, timeout=2)
+    conexao.reset_input_buffer()
+    print("✅ Porta Serial aberta com sucesso! Aguardando dados da ESP32...\n")
 
     while True:
-        if conexao_serial.in_waiting > 0:
-            linha = conexao_serial.readline().decode('utf-8', errors='ignore').strip()
+        if conexao.in_waiting > 0:
+            linha = conexao.readline().decode('utf-8', errors='ignore').strip()
+            print(f"[RECEBIDO] -> {linha}")
 
+            # Salva no banco quando a linha for um JSON válido
             if linha.startswith("{") and linha.endswith("}"):
                 try:
                     dados = json.loads(linha)
                     bpm = dados.get("bpm", 0)
-                    spo2 = dados.get("spo2", 0)
+                    spo2 = dados.get("spo2", 98)
 
                     if bpm > 0:
-                        # 1. Pega o ID atual do usuário no banco
                         user_id = pegar_usuario_logado(db)
-
-                        # 2. Calcula a categoria de ansiedade
-                        status_ansiedade = calcular_nivel_ansiedade(bpm)
-
-                        # 3. Garante reconexão e insere no banco
+                        
                         db.ping(reconnect=True, attempts=3, delay=1)
                         cursor_insert = db.cursor()
                         sql = "INSERT INTO leituras_sensor (usuario_id, bpm, spo2) VALUES (%s, %s, %s)"
                         cursor_insert.execute(sql, (user_id, bpm, spo2))
                         cursor_insert.close()
-
-                        # 4. Exibe no monitor/terminal com a classificação
-                        print(f"📥 BPM: {bpm} | SpO2: {spo2}% | Status: {status_ansiedade}")
-
-                except json.JSONDecodeError:
-                    pass
+                        
+                        print(f"   └─ 💾 [SALVO NO BANCO] usuario_id: {user_id} | bpm: {bpm} | spo2: {spo2}%")
                 except Exception as err:
-                    print(f"⚠️ Erro ao salvar: {err}")
+                    print(f"   └─ ⚠️ Erro ao gravar no banco: {err}")
 
-        time.sleep(0.5)
+        time.sleep(0.01)
 
+except serial.SerialException as e:
+    print(f"\n❌ ERRO DE COMUNICAÇÃO SERIAL: {e}")
+    print("\nO que verificar:")
+    print("1. O Monitor Serial do Arduino IDE está ABERTO? (Se estiver, FECHE agora).")
+    print("2. A porta no Gerenciador de Dispositivos ainda é a COM3?")
 except KeyboardInterrupt:
-    print("\n🛑 Programa parado pelo usuário.")
-except Exception as e:
-    print(f"❌ Erro na porta Serial ({PORTA_USB}): {e}")
+    print("\nTeste encerrado.")
 finally:
     if 'db' in locals() and db and db.is_connected():
         db.close()
